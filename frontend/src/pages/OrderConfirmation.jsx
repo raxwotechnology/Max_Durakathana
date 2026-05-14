@@ -176,10 +176,7 @@ const OrderConfirmation = () => {
         )}
         <button onClick={() => {
           const lines = [
-            '═══════════════════════════════════════',
-            '           ZAGE FASHION CORNER',
-            '            PURCHASE RECEIPT',
-            '═══════════════════════════════════════',
+    
             '', `Order: #${order._id.slice(-8).toUpperCase()}`,
             `Date: ${new Date(order.createdAt).toLocaleString()}`,
             `Status: ${order.orderStatus}`, `Payment: ${order.paymentMethod}`, '',
