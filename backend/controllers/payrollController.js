@@ -1,6 +1,8 @@
 const Payroll = require('../models/Payroll');
 const User = require('../models/User');
 const Settings = require('../models/Settings');
+const LeavePolicy = require('../models/LeavePolicy');
+const AttendancePolicy = require('../models/AttendancePolicy');
 const { sendNotification } = require('../utils/notificationService');
 const { salaryPaidEmail, sendEmail } = require('../utils/emailService');
 
@@ -21,8 +23,19 @@ const calculateSalary = async (req, res, next) => {
   try {
     const { employeeId, month, year, allowances = 0, deductions = 0, bonuses = 0 } = req.body;
 
-    const employee = await User.findById(employeeId);
+    const employee = await User.findById(employeeId)
+      .populate('employeeInfo.leavePolicyId')
+      .populate('employeeInfo.attendancePolicyId');
     if (!employee) { res.status(404); return next(new Error('Employee not found')); }
+
+    let leavePolicy = employee.employeeInfo?.leavePolicyId;
+    if (!leavePolicy) {
+      leavePolicy = await LeavePolicy.findOne({ isDefault: true });
+    }
+    let attendancePolicy = employee.employeeInfo?.attendancePolicyId;
+    if (!attendancePolicy) {
+      attendancePolicy = await AttendancePolicy.findOne({ isDefault: true });
+    }
 
     const Attendance = require('../models/Attendance');
     const OvertimePay = require('../models/OvertimePay');
@@ -55,21 +68,82 @@ const calculateSalary = async (req, res, next) => {
 
     let basicSalary = 0;
     let attendanceDeductions = 0;
+    let excessLeaveDeduction = 0;
 
     if (payType === 'daily') {
       basicSalary = basePayAmount * totalWorkingDaysCount;
     } else if (payType === 'weekly') {
-      // Approximate 4 weeks per month for simplicity, or count weeks
       basicSalary = basePayAmount * 4; 
     } else {
-      // Monthly
       basicSalary = basePayAmount;
       const dailyRate = basicSalary / 30;
-      attendances.forEach(att => {
-        if (att.status === 'absent') attendanceDeductions += dailyRate;
-        else if (att.status === 'half-day') attendanceDeductions += (dailyRate / 2);
-        else if (att.status === 'late') attendanceDeductions += 200; // Adjusted penalty
-      });
+
+      if (attendancePolicy) {
+        const graceTime = attendancePolicy.graceTimeMinutes || 15;
+        const latePenalty = attendancePolicy.lateArrivalPenalty || 0;
+        const earlyPenalty = attendancePolicy.earlyCheckoutPenalty || 0;
+        const halfDayThreshold = attendancePolicy.halfDayThresholdHours || 4;
+
+        const [startH, startM] = (attendancePolicy.shiftStartTime || '09:00').split(':').map(Number);
+        const shiftStartMinutes = startH * 60 + startM;
+
+        const [endH, endM] = (attendancePolicy.shiftEndTime || '17:00').split(':').map(Number);
+        const shiftEndMinutes = endH * 60 + endM;
+
+        attendances.forEach(att => {
+          if (att.status === 'absent') {
+            attendanceDeductions += dailyRate;
+          } else if (att.status === 'half-day' || (att.hoursWorked > 0 && att.hoursWorked < halfDayThreshold)) {
+            attendanceDeductions += (dailyRate / 2);
+          } else {
+            if (att.checkIn) {
+              const checkInMinutes = att.checkIn.getHours() * 60 + att.checkIn.getMinutes();
+              if (checkInMinutes - shiftStartMinutes > graceTime) {
+                attendanceDeductions += latePenalty;
+              }
+            }
+            if (att.checkOut) {
+              const checkOutMinutes = att.checkOut.getHours() * 60 + att.checkOut.getMinutes();
+              if (shiftEndMinutes - checkOutMinutes > 0) {
+                attendanceDeductions += earlyPenalty;
+              }
+            }
+          }
+        });
+      } else {
+        attendances.forEach(att => {
+          if (att.status === 'absent') attendanceDeductions += dailyRate;
+          else if (att.status === 'half-day') attendanceDeductions += (dailyRate / 2);
+          else if (att.status === 'late') attendanceDeductions += 200;
+        });
+      }
+
+      if (leavePolicy) {
+        const Leave = require('../models/Leave');
+        const leavesYear = await Leave.find({
+          employeeId,
+          status: 'approved',
+          startDate: { $gte: new Date(year, 0, 1) },
+          endDate: { $lte: new Date(year, 11, 31, 23, 59, 59) }
+        });
+
+        let totalExcessDays = 0;
+        const leaveTypes = ['annual', 'sick', 'casual'];
+        for (const type of leaveTypes) {
+          const takenBefore = leavesYear
+            .filter(l => l.leaveType === type && l.startDate < startDate)
+            .reduce((sum, l) => sum + l.totalDays, 0);
+
+          const takenCurrent = leavesYear
+            .filter(l => l.leaveType === type && l.startDate >= startDate && l.startDate <= endDate)
+            .reduce((sum, l) => sum + l.totalDays, 0);
+
+          const limit = leavePolicy[type + 'Leaves'] || 0;
+          const excess = Math.max(0, takenBefore + takenCurrent - limit) - Math.max(0, takenBefore - limit);
+          totalExcessDays += excess;
+        }
+        excessLeaveDeduction = totalExcessDays * (leavePolicy.deductionPerExcessLeave || 0);
+      }
     }
 
     const actualBonuses = Number(bonuses) + totalOTAmount + totalTargetBonus;
@@ -78,9 +152,8 @@ const calculateSalary = async (req, res, next) => {
     const epfEmployer = parseFloat((basicSalary * EPF_EMPLOYER_RATE).toFixed(2));
     const etfEmployer = parseFloat((basicSalary * ETF_RATE).toFixed(2));
     
-    const totalDeductions = epfEmployee + Number(deductions) + attendanceDeductions;
+    const totalDeductions = epfEmployee + Number(deductions) + excessLeaveDeduction + attendanceDeductions;
     const netSalary = parseFloat((grossSalary - totalDeductions).toFixed(2));
-
 
     res.json({
       employeeId,
@@ -96,7 +169,7 @@ const calculateSalary = async (req, res, next) => {
       epfEmployee,
       epfEmployer,
       etfEmployer,
-      otherDeductions: Number(deductions),
+      otherDeductions: Number(deductions) + excessLeaveDeduction,
       attendanceDeductions,
       totalDeductions,
       netSalary,
@@ -118,8 +191,19 @@ const processSalaryPayment = async (req, res, next) => {
       return next(new Error(`Salary already processed for ${month}/${year}`));
     }
 
-    const employee = await User.findById(employeeId);
+    const employee = await User.findById(employeeId)
+      .populate('employeeInfo.leavePolicyId')
+      .populate('employeeInfo.attendancePolicyId');
     if (!employee) { res.status(404); return next(new Error('Employee not found')); }
+
+    let leavePolicy = employee.employeeInfo?.leavePolicyId;
+    if (!leavePolicy) {
+      leavePolicy = await LeavePolicy.findOne({ isDefault: true });
+    }
+    let attendancePolicy = employee.employeeInfo?.attendancePolicyId;
+    if (!attendancePolicy) {
+      attendancePolicy = await AttendancePolicy.findOne({ isDefault: true });
+    }
 
     const Attendance = require('../models/Attendance');
     const OvertimePay = require('../models/OvertimePay');
@@ -147,6 +231,7 @@ const processSalaryPayment = async (req, res, next) => {
 
     let basicSalary = 0;
     let attendanceDeductions = 0;
+    let excessLeaveDeduction = 0;
 
     if (payType === 'daily') {
       basicSalary = basePayAmount * totalDaysWorked;
@@ -155,11 +240,73 @@ const processSalaryPayment = async (req, res, next) => {
     } else {
       basicSalary = basePayAmount;
       const dailyRate = basicSalary / 30;
-      attendances.forEach(att => {
-        if (att.status === 'absent') attendanceDeductions += dailyRate;
-        else if (att.status === 'half-day') attendanceDeductions += (dailyRate / 2);
-        else if (att.status === 'late') attendanceDeductions += 200;
-      });
+
+      if (attendancePolicy) {
+        const graceTime = attendancePolicy.graceTimeMinutes || 15;
+        const latePenalty = attendancePolicy.lateArrivalPenalty || 0;
+        const earlyPenalty = attendancePolicy.earlyCheckoutPenalty || 0;
+        const halfDayThreshold = attendancePolicy.halfDayThresholdHours || 4;
+
+        const [startH, startM] = (attendancePolicy.shiftStartTime || '09:00').split(':').map(Number);
+        const shiftStartMinutes = startH * 60 + startM;
+
+        const [endH, endM] = (attendancePolicy.shiftEndTime || '17:00').split(':').map(Number);
+        const shiftEndMinutes = endH * 60 + endM;
+
+        attendances.forEach(att => {
+          if (att.status === 'absent') {
+            attendanceDeductions += dailyRate;
+          } else if (att.status === 'half-day' || (att.hoursWorked > 0 && att.hoursWorked < halfDayThreshold)) {
+            attendanceDeductions += (dailyRate / 2);
+          } else {
+            if (att.checkIn) {
+              const checkInMinutes = att.checkIn.getHours() * 60 + att.checkIn.getMinutes();
+              if (checkInMinutes - shiftStartMinutes > graceTime) {
+                attendanceDeductions += latePenalty;
+              }
+            }
+            if (att.checkOut) {
+              const checkOutMinutes = att.checkOut.getHours() * 60 + att.checkOut.getMinutes();
+              if (shiftEndMinutes - checkOutMinutes > 0) {
+                attendanceDeductions += earlyPenalty;
+              }
+            }
+          }
+        });
+      } else {
+        attendances.forEach(att => {
+          if (att.status === 'absent') attendanceDeductions += dailyRate;
+          else if (att.status === 'half-day') attendanceDeductions += (dailyRate / 2);
+          else if (att.status === 'late') attendanceDeductions += 200;
+        });
+      }
+
+      if (leavePolicy) {
+        const Leave = require('../models/Leave');
+        const leavesYear = await Leave.find({
+          employeeId,
+          status: 'approved',
+          startDate: { $gte: new Date(year, 0, 1) },
+          endDate: { $lte: new Date(year, 11, 31, 23, 59, 59) }
+        });
+
+        let totalExcessDays = 0;
+        const leaveTypes = ['annual', 'sick', 'casual'];
+        for (const type of leaveTypes) {
+          const takenBefore = leavesYear
+            .filter(l => l.leaveType === type && l.startDate < startDate)
+            .reduce((sum, l) => sum + l.totalDays, 0);
+
+          const takenCurrent = leavesYear
+            .filter(l => l.leaveType === type && l.startDate >= startDate && l.startDate <= endDate)
+            .reduce((sum, l) => sum + l.totalDays, 0);
+
+          const limit = leavePolicy[type + 'Leaves'] || 0;
+          const excess = Math.max(0, takenBefore + takenCurrent - limit) - Math.max(0, takenBefore - limit);
+          totalExcessDays += excess;
+        }
+        excessLeaveDeduction = totalExcessDays * (leavePolicy.deductionPerExcessLeave || 0);
+      }
     }
 
     const actualBonuses = Number(bonuses) + totalOTAmount + totalTargetBonus;
@@ -167,9 +314,8 @@ const processSalaryPayment = async (req, res, next) => {
     const epfEmployee = parseFloat((basicSalary * EPF_EMPLOYEE_RATE).toFixed(2));
     const epfEmployer = parseFloat((basicSalary * EPF_EMPLOYER_RATE).toFixed(2));
     const etfEmployer = parseFloat((basicSalary * ETF_RATE).toFixed(2));
-    const totalDeductions = epfEmployee + Number(deductions) + attendanceDeductions;
+    const totalDeductions = epfEmployee + Number(deductions) + excessLeaveDeduction + attendanceDeductions;
     const netSalary = parseFloat((grossSalary - totalDeductions).toFixed(2));
-
 
     const payroll = await Payroll.create({
       employeeId,
@@ -185,7 +331,7 @@ const processSalaryPayment = async (req, res, next) => {
       epfEmployee,
       epfEmployer,
       etfEmployer,
-      otherDeductions: Number(deductions),
+      otherDeductions: Number(deductions) + excessLeaveDeduction,
       attendanceDeductions,
       totalDeductions,
       netSalary,

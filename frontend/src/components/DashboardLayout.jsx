@@ -6,6 +6,7 @@ import useSettingsStore from '../store/settingsStore';
 import { adminNavGroups, getAdminNavGroups } from '../pages/admin/adminNavItems';
 import useAdminStoreStore from '../store/adminStoreStore';
 import { getAdminStores } from '../services/api';
+import { getImageUrl } from '../utils/imageHelper';
 
 // ─── Shared NavLink ────────────────────────────────────────────────────────────
 const NavLink = ({ item, location, collapsed, onNavigate }) => {
@@ -131,7 +132,7 @@ const DashboardLayout = ({ children, navItems, title }) => {
 
   const brandName = settings?.shopName || 'Mobile Hub';
   // Use whichever logo field is populated (logoUrl is built by settingsStore from logo path)
-  const logoSrc = settings?.logoUrl || settings?.logo || '';
+  const logoSrc = getImageUrl(settings?.logoUrl || settings?.logo || '');
 
   // Close sidebar on route change (mobile)
   useEffect(() => {

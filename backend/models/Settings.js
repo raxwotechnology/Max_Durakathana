@@ -5,6 +5,10 @@ const settingsSchema = new mongoose.Schema({
   tagline: { type: String, default: 'Where style meets accessories' },
   logo: { type: String, default: '' },
   logoUrl: { type: String, default: '' },
+  seal: { type: String, default: '' },
+  sealUrl: { type: String, default: '' },
+  letterheadHeader: { type: String, default: '' },
+  letterheadFooter: { type: String, default: '' },
   email: { type: String, default: 'hello@mobilehub.com' },
   phone: { type: String, default: '+94 11 255 5000' },
   phone2: { type: String, default: '' },
@@ -96,6 +100,12 @@ const settingsSchema = new mongoose.Schema({
     posReceipt: { type: String, default: 'Thank you for shopping at {shopName}. Invoice {invoiceNo}, total Rs. {total}.' },
     orderStatus: { type: String, default: 'Your order {orderNo} is now {status}. - {shopName}' },
   },
+  labelPrinters: [{
+    name: { type: String, required: true },
+    layout: { type: String, enum: ['50x30', '38x25', 'a4_3col', '80mm'], default: '50x30' },
+    connection: { type: String, default: 'USB' },
+    isDefault: { type: Boolean, default: false }
+  }],
 }, { timestamps: true });
 
 module.exports = mongoose.model('Settings', settingsSchema);

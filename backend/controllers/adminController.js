@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Store = require('../models/Store');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const Account = require('../models/Account');
 const { sendNotification } = require('../utils/notificationService');
 
 // @desc    Get all users
@@ -123,6 +124,60 @@ const getAllStores = async (req, res, next) => {
   try {
     const stores = await Store.find({}).populate('managerId', 'name email').sort({ createdAt: -1 });
     res.json(stores);
+  } catch (error) { next(error); }
+};
+
+// @desc    Get store summaries with stats
+// @route   GET /api/admin/stores/summaries
+const getStoreSummaries = async (req, res, next) => {
+  try {
+    const stores = await Store.find({}).populate('managerId', 'name email').sort({ createdAt: -1 });
+    
+    const productStats = await Product.aggregate([
+      {
+        $group: {
+          _id: '$storeId',
+          totalProducts: { $sum: 1 },
+          totalStock: { $sum: '$stock' },
+          totalStockValue: { $sum: { $multiply: ['$stock', { $ifNull: ['$costPrice', 0] }] } }
+        }
+      }
+    ]);
+
+    const accountStats = await Account.aggregate([
+      {
+        $group: {
+          _id: '$storeId',
+          totalAssets: { $sum: '$balance' }
+        }
+      }
+    ]);
+
+    const statsByStore = {};
+    stores.forEach(s => {
+      statsByStore[s._id] = { totalProducts: 0, totalStock: 0, totalStockValue: 0, totalAssets: 0 };
+    });
+
+    productStats.forEach(stat => {
+      if (statsByStore[stat._id]) {
+        statsByStore[stat._id].totalProducts = stat.totalProducts;
+        statsByStore[stat._id].totalStock = stat.totalStock;
+        statsByStore[stat._id].totalStockValue = stat.totalStockValue || 0;
+      }
+    });
+
+    accountStats.forEach(stat => {
+      if (statsByStore[stat._id]) {
+        statsByStore[stat._id].totalAssets = stat.totalAssets || 0;
+      }
+    });
+
+    const summaries = stores.map(s => ({
+      ...s.toObject(),
+      ...statsByStore[s._id]
+    }));
+
+    res.json(summaries);
   } catch (error) { next(error); }
 };
 
@@ -359,6 +414,7 @@ module.exports = {
   toggleUserStatus,
   deleteUser,
   getAllStores,
+  getStoreSummaries,
   toggleStore,
   getAllOrders,
   getAllProducts,

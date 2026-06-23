@@ -58,6 +58,7 @@ export const getMe = () => API.get('/auth/me');
 export const updateProfile = (data) => API.put('/auth/profile', data);
 export const getCashiers = () => API.get('/auth/cashiers');
 export const posLogin = (data) => API.post('/auth/pos-login', data);
+export const verifyPassword = (password) => API.post('/auth/verify-password', { password });
 
 // Products
 export const getProducts = (params) => API.get('/products', { params });
@@ -126,6 +127,7 @@ export const updateUserRole = (id, data) => API.put(`/admin/users/${id}/role`, d
 export const toggleUserStatus = (id) => API.put(`/admin/users/${id}/toggle-status`);
 export const deleteUser = (id) => API.delete(`/admin/users/${id}`);
 export const getAdminStores = () => API.get('/admin/stores');
+export const getAdminStoreSummaries = () => API.get('/admin/stores/summaries');
 export const toggleStoreStatus = (id) => API.put(`/admin/stores/${id}/toggle`);
 export const getAdminOrders = (params) => API.get('/admin/orders', { params });
 export const getAdminProducts = (params) => API.get('/admin/products', { params });
@@ -193,6 +195,20 @@ export const deleteEmployee = (id) => API.delete(`/hr/employees/${id}`);
 export const getStoreLeaves = (params) => API.get('/hr/leaves/store', { params });
 export const adminMarkAttendance = (data) => API.post('/hr/attendance/mark', data);
 export const adminCreateLeave = (data) => API.post('/hr/leaves/create-for-employee', data);
+
+// HR Policies
+export const getLeavePolicies = () => API.get('/hr/policies/leave');
+export const createLeavePolicy = (data) => API.post('/hr/policies/leave', data);
+export const updateLeavePolicy = (id, data) => API.put(`/hr/policies/leave/${id}`, data);
+export const deleteLeavePolicy = (id) => API.delete(`/hr/policies/leave/${id}`);
+
+export const getAttendancePolicies = () => API.get('/hr/policies/attendance');
+export const createAttendancePolicy = (data) => API.post('/hr/policies/attendance', data);
+export const updateAttendancePolicy = (id, data) => API.put(`/hr/policies/attendance/${id}`, data);
+export const deleteAttendancePolicy = (id) => API.delete(`/hr/policies/attendance/${id}`);
+
+export const assignPoliciesToEmployee = (data) => API.post('/hr/policies/assign', data);
+export const assignPoliciesToAllEmployees = (data) => API.post('/hr/policies/assign-all', data);
 
 // Breaks
 export const startBreak = (data) => API.post('/hr/breaks/start', data);

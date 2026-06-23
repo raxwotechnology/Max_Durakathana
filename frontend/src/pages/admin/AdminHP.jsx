@@ -18,6 +18,7 @@ import { getHPRecords, recordHPPayment, deleteHPRecord, getAccounts, getHPById }
 import { toast } from 'react-toastify';
 import DashboardLayout from '../../components/DashboardLayout';
 import { adminNavGroups as navItems } from './adminNavItems';
+import DeleteConfirmationModal from '../../components/DeleteConfirmationModal';
 
 const AdminHP = () => {
   const [records, setRecords] = useState([]);
@@ -93,13 +94,21 @@ const AdminHP = () => {
     }
   };
 
-  const handleDeleteHP = async (id) => {
-    if (!window.confirm('Are you sure you want to permanently delete this Hire Purchase agreement? This cannot be undone.')) return;
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState(null);
+
+  const handleDeleteClick = (record) => {
+    setItemToDelete({ id: record._id, name: `HP Agreement for ${record.customer?.name || 'Customer'}` });
+    setDeleteModalOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!itemToDelete) return;
     try {
-      await deleteHPRecord(id);
+      await deleteHPRecord(itemToDelete.id);
       toast.success('Installment agreement deleted successfully');
       fetchData();
-      if (showDetailsModal && selectedHPDetails?._id === id) {
+      if (showDetailsModal && selectedHPDetails?._id === itemToDelete.id) {
         setShowDetailsModal(false);
       }
     } catch (err) {
@@ -268,7 +277,7 @@ const AdminHP = () => {
                           Pay
                         </button>
                         <button 
-                          onClick={() => handleDeleteHP(record._id)}
+                          onClick={() => handleDeleteClick(record)}
                           className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-all"
                           title="Delete Agreement"
                         >
@@ -488,6 +497,13 @@ const AdminHP = () => {
           </div>
         </div>
       )}
+
+      <DeleteConfirmationModal
+        isOpen={deleteModalOpen}
+        onClose={() => { setDeleteModalOpen(false); setItemToDelete(null); }}
+        onConfirm={handleDeleteConfirm}
+        itemName={itemToDelete?.name}
+      />
     </DashboardLayout>
   );
 };

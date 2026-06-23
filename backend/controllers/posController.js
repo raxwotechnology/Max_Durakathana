@@ -415,11 +415,12 @@ const posCheckout = async (req, res, next) => {
       });
     }
 
-    // Require Customer details for mobiles or credit sales
-    if (hasMobiles || isCredit) {
+    // Require Customer details for mobiles, credit sales, or Hire Purchase
+    const isHP = paymentMethod === 'hire_purchase';
+    if (hasMobiles || isCredit || isHP) {
       if (!customerName || !customerPhone) {
         res.status(400);
-        return next(new Error('Customer name and phone number are required for credit sales or mobile device purchases.'));
+        return next(new Error('Customer name and phone number are required for credit sales, mobile device purchases, or Installment/HP sales.'));
       }
     }
 
@@ -538,7 +539,8 @@ const posCheckout = async (req, res, next) => {
     const invoiceNumber = `INV-${dateStr}-${String(todayPosCount + 1).padStart(4, '0')}`;
 
     // Credit sale handling
-    const creditBalance = isCredit ? Math.max(0, totalAmount - totalPaidFromPayments) : 0;
+    const isOrderCredit = isCredit || isHP;
+    const creditBalance = isOrderCredit ? Math.max(0, totalAmount - (isHP ? (hirePurchaseData?.downPayment || 0) : totalPaidFromPayments)) : 0;
 
     // Create the POS order
     const order = await Order.create({
@@ -549,14 +551,14 @@ const posCheckout = async (req, res, next) => {
       tax,
       deliveryFee: 0,
       paymentMethod: paymentMethod || (actualPayments[0]?.method) || 'cash',
-      paymentStatus: isCredit && creditBalance > 0 ? 'pending' : 'completed',
+      paymentStatus: isOrderCredit && creditBalance > 0 ? 'pending' : 'completed',
       orderStatus: 'completed',
       isPosOrder: true,
       invoiceNumber,
       cashierId: req.user._id,
       posSessionId: activeSession._id,
-      tenderedAmount: isCredit ? totalPaidFromPayments : (tenderedAmount || totalAmount),
-      changeGiven: isCredit ? 0 : changeGiven,
+      tenderedAmount: isOrderCredit ? (isHP ? (hirePurchaseData?.downPayment || 0) : totalPaidFromPayments) : (tenderedAmount || totalAmount),
+      changeGiven: isOrderCredit ? 0 : changeGiven,
       customerName: customerName || undefined,
       customerPhone: normalizedCustomerPhone || undefined,
       couponCode: appliedCoupon || undefined,
@@ -564,8 +566,8 @@ const posCheckout = async (req, res, next) => {
       receiptEmail: receiptEmail || undefined,
       sendSmsReceipt: !!sendSmsReceipt,
       printReceipt: !!printReceipt,
-      isCredit: !!isCredit,
-      amountPaid: isCredit ? totalPaidFromPayments : totalAmount,
+      isCredit: !!isOrderCredit,
+      amountPaid: isOrderCredit ? (totalAmount - creditBalance) : totalAmount,
       creditBalance,
       creditNote: creditNote || undefined,
       loyaltyPointsRedeemed: loyaltyPointsRedeemed || 0,
@@ -589,10 +591,39 @@ const posCheckout = async (req, res, next) => {
     // Resolve CustomerReturn if exchangeReturnId was applied
     if (exchangeReturnId) {
       const CustomerReturn = require('../models/CustomerReturn');
-      await CustomerReturn.findByIdAndUpdate(exchangeReturnId, {
-        status: 'resolved',
-        resolution: 'exchange',
-      });
+      const ret = await CustomerReturn.findById(exchangeReturnId);
+      if (ret && ret.status !== 'resolved') {
+        // 1. Sync returned items back to stock (conditional on condition === 'good')
+        for (const it of ret.items) {
+          if (it.condition === 'good') {
+            await Product.findByIdAndUpdate(it.productId, { $inc: { stock: it.qty } });
+          }
+        }
+
+        // 2. Record remainder difference as ledger income
+        const totalReturnValue = ret.items.reduce((sum, item) => sum + (item.unitPrice * item.qty), 0);
+        const remainder = totalReturnValue - exchangeCreditAmt;
+        if (remainder > 0) {
+          const { recordTransaction } = require('../services/ledgerService');
+          const Account = require('../models/Account');
+          const defaultAccount = await Account.findOne({ isDefault: true }).lean() || await Account.findOne().lean();
+
+          await recordTransaction({
+            storeId,
+            accountId: defaultAccount?._id || undefined,
+            type: 'income',
+            category: 'Returns & Exchange',
+            amount: remainder,
+            paymentMethod: 'Cash',
+            description: `Unpaid remainder from POS return/exchange ${ret.holdBillNo || ret._id.toString().slice(-8)}. Return Value: Rs. ${totalReturnValue.toFixed(2)}, Applied Credit: Rs. ${exchangeCreditAmt.toFixed(2)}`,
+            createdBy: req.user._id,
+          });
+        }
+
+        ret.status = 'resolved';
+        ret.resolution = 'exchange';
+        await ret.save();
+      }
     }
 
     // Return full order with store info for invoice
@@ -615,7 +646,7 @@ const posCheckout = async (req, res, next) => {
     if (sendSmsReceipt && normalizedCustomerPhone) {
       try {
         await sendSms(normalizedCustomerPhone, await buildPosReceiptMessage(totalAmount, {
-          invoiceNo,
+          invoiceNo: invoiceNumber,
           orderNo: order._id.toString().slice(-8).toUpperCase(),
         }));
       } catch (smsErr) {
@@ -654,12 +685,12 @@ const posCheckout = async (req, res, next) => {
     const { recordTransaction } = require('../services/ledgerService');
 
     for (const p of actualPayments) {
-      if (p.amount > 0) {
+      if (p.amount > 0 && p.method !== 'hire_purchase') {
         await recordTransaction({
           storeId,
           accountId: p.accountId,
           type: 'income',
-          category: isCredit ? 'Sales (Partial Credit)' : 'Sales',
+          category: isOrderCredit ? 'Sales (Partial Credit)' : 'Sales',
           amount: p.amount,
           paymentMethod: p.method,
           chequeDetails: p.chequeDetails,

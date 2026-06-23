@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { Settings, Save, Upload, Globe, Phone, Mail, MapPin, Palette, DollarSign, Gift, Shield, Store, UserCog, FileText, ClipboardCheck, MessageSquare } from 'lucide-react';
 import DashboardLayout from '../../components/DashboardLayout';
-import { getSettings, updateSettings, uploadLogo } from '../../services/api';
+import { getSettings, updateSettings, uploadLogo, uploadImage } from '../../services/api';
 import { toast } from 'react-toastify';
 import { adminNavGroups as navItems } from './adminNavItems';
 import useSettingsStore from '../../store/settingsStore';
+import { getImageUrl } from '../../utils/imageHelper';
 
 const SettingsInputField = ({ label, value, onChange, type = 'text', placeholder = '', suffix = '' }) => (
   <div>
@@ -41,6 +42,7 @@ const AdminSettings = () => {
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState('general');
   const fileRef = useRef(null);
+  const sealFileRef = useRef(null);
   const setSettingsLocal = useSettingsStore((s) => s.setSettingsLocal);
 
   const [defaultPrinter, setDefaultPrinter] = useState(() => localStorage.getItem('default_printer') || '');
@@ -137,6 +139,24 @@ const AdminSettings = () => {
     }
   };
 
+  const handleSealUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+    const formData = new FormData();
+    formData.append('image', file);
+    try {
+      const { data } = await uploadImage(formData);
+      const sealPath = data.url;
+      const merged = { ...settings, sealUrl: sealPath, seal: sealPath };
+      setSettings(merged);
+      setSettingsLocal(merged);
+      toast.success('Seal uploaded successfully! ✅');
+    } catch (err) {
+      toast.error('Failed to upload seal: ' + (err.response?.data?.message || err.message));
+    }
+  };
+
   if (loading) return <DashboardLayout navItems={navItems} title="Mobile Hub Admin Panel"><div className="flex items-center justify-center h-64"><div className="w-10 h-10 border-4 border-primary-blue border-t-transparent rounded-full animate-spin" /></div></DashboardLayout>;
 
   const tabs = [
@@ -184,7 +204,7 @@ const AdminSettings = () => {
               <div className="flex items-center gap-6 mb-6">
                 <div className="w-24 h-24 rounded-2xl border-2 border-dashed border-card-border flex items-center justify-center overflow-hidden bg-gray-50">
                   {(settings.logoUrl || settings.logo) ? (
-                    <img src={settings.logoUrl || settings.logo} alt="Logo" className="w-full h-full object-cover" />
+                    <img src={getImageUrl(settings.logoUrl || settings.logo)} alt="Logo" className="w-full h-full object-cover" />
                   ) : (
                     <Store size={32} className="text-gray-300" />
                   )}
@@ -351,6 +371,53 @@ const AdminSettings = () => {
                     placeholder="e.g. 88 Tech Avenue, Colombo 03"
                   />
 
+                  {/* Official Store Seal Upload */}
+                  <div>
+                    <label className="text-xs font-semibold text-muted-text block mb-1">Official Store Seal Image</label>
+                    <div className="flex items-center gap-4">
+                      <div className="w-16 h-16 rounded-xl border border-card-border flex items-center justify-center overflow-hidden bg-gray-50">
+                        {(settings.sealUrl || settings.seal) ? (
+                          <img src={getImageUrl(settings.sealUrl || settings.seal)} alt="Store Seal" className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-[10px] text-muted-text">No Seal</span>
+                        )}
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => sealFileRef.current?.click()}
+                          className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-dark-navy text-xs font-medium px-3 py-2 rounded-lg transition-colors border border-card-border"
+                        >
+                          <Upload size={12} /> Upload Seal
+                        </button>
+                        <input
+                          ref={sealFileRef}
+                          type="file"
+                          accept="image/*"
+                          onChange={handleSealUpload}
+                          className="hidden"
+                        />
+                        <p className="text-[10px] text-muted-text mt-1">Rendered on official POS bills.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Letterhead Header Textarea */}
+                  <SettingsTextArea
+                    label="Letterhead Header Text (A4 Invoice)"
+                    value={settings.letterheadHeader}
+                    onChange={(v) => handleChange('letterheadHeader', v)}
+                    placeholder="e.g. SMART MOBILE HUB (PVT) LTD\nNo. 12, Galle Road, Colombo\nReg: PV-12345"
+                  />
+
+                  {/* Letterhead Footer Textarea */}
+                  <SettingsTextArea
+                    label="Letterhead Footer Text (A4 Invoice)"
+                    value={settings.letterheadFooter}
+                    onChange={(v) => handleChange('letterheadFooter', v)}
+                    placeholder="e.g. Thank you for shopping with us!\nContact: info@smartmobile.lk | Web: smartmobile.lk"
+                  />
+
                   {/* Default Printer Selection */}
                   <div>
                     <label className="text-xs font-semibold text-muted-text block mb-1">Default Local Printer Assignment</label>
@@ -420,7 +487,7 @@ const AdminSettings = () => {
                 <div className="w-[300px] bg-white border border-gray-300 shadow-lg p-5 font-mono text-[11px] text-dark-navy relative overflow-hidden" style={{ minHeight: '400px', borderStyle: 'dashed' }}>
                   <div className="text-center mb-4">
                     {(settings.logoUrl || settings.logo) && (
-                      <img src={settings.logoUrl || settings.logo} alt="Logo" className="w-12 h-12 object-contain mx-auto mb-2 opacity-80" />
+                      <img src={getImageUrl(settings.logoUrl || settings.logo)} alt="Logo" className="w-12 h-12 object-contain mx-auto mb-2 opacity-80" />
                     )}
                     <h4 className="font-bold text-sm uppercase">{settings.receiptSettings?.headerTitle || settings.shopName}</h4>
                     <p className="text-[10px] text-muted-text">{settings.receiptSettings?.subtitle || settings.address}</p>
@@ -484,6 +551,11 @@ const AdminSettings = () => {
                     <p className="font-bold">{settings.receiptSettings?.footerMessage || 'Thank you for your purchase!'}</p>
                     <p className="italic text-[9px]">{settings.receiptSettings?.termsAndConditions}</p>
                     <p className="italic text-[9px]">{settings.receiptSettings?.warrantyTerms}</p>
+                    {(settings.sealUrl || settings.seal) && (
+                      <div className="flex justify-center mt-2">
+                        <img src={getImageUrl(settings.sealUrl || settings.seal)} alt="Store Seal" className="w-12 h-12 object-contain opacity-70" />
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -495,13 +567,21 @@ const AdminSettings = () => {
                   <div className="flex justify-between items-start mb-6 mt-2">
                     <div>
                       {(settings.logoUrl || settings.logo) && (
-                        <img src={settings.logoUrl || settings.logo} alt="Logo" className="w-14 h-14 object-contain mb-2 opacity-95" />
+                        <img src={getImageUrl(settings.logoUrl || settings.logo)} alt="Logo" className="w-14 h-14 object-contain mb-2 opacity-95" />
                       )}
-                      <h4 className="font-bold text-sm uppercase text-dark-navy" style={{ color: settings.receiptSettings?.themeColor || '#1e3a8a' }}>
-                        {settings.receiptSettings?.headerTitle || settings.shopName}
-                      </h4>
-                      <p className="text-muted-text">{settings.receiptSettings?.subtitle || settings.address}</p>
-                      <p className="text-muted-text">Email: {settings.email} | Tel: {settings.phone}</p>
+                      {settings.letterheadHeader ? (
+                        <pre className="font-sans text-[10px] leading-relaxed text-dark-navy whitespace-pre-line">
+                          {settings.letterheadHeader}
+                        </pre>
+                      ) : (
+                        <>
+                          <h4 className="font-bold text-sm uppercase text-dark-navy" style={{ color: settings.receiptSettings?.themeColor || '#1e3a8a' }}>
+                            {settings.receiptSettings?.headerTitle || settings.shopName}
+                          </h4>
+                          <p className="text-muted-text">{settings.receiptSettings?.subtitle || settings.address}</p>
+                          <p className="text-muted-text">Email: {settings.email} | Tel: {settings.phone}</p>
+                        </>
+                      )}
                     </div>
                     <div className="text-right">
                       <h3 className="text-sm font-bold uppercase tracking-wider text-muted-text">Invoice</h3>
@@ -586,8 +666,24 @@ const AdminSettings = () => {
                     </div>
                   </div>
 
-                  <div className="text-center text-xs text-muted-text mt-8 border-t border-gray-100 pt-3">
-                    {settings.receiptSettings?.footerMessage || 'Thank you for your purchase!'}
+                  <div className="flex justify-between items-end mt-6 pt-3 border-t border-gray-100">
+                    <div className="w-2/3 text-[9px] text-muted-text">
+                      {settings.letterheadFooter ? (
+                        <pre className="font-sans text-[9px] leading-relaxed whitespace-pre-line text-left">
+                          {settings.letterheadFooter}
+                        </pre>
+                      ) : (
+                        <p>{settings.receiptSettings?.footerMessage || 'Thank you for your purchase!'}</p>
+                      )}
+                    </div>
+                    <div className="w-1/3 flex justify-end">
+                      {(settings.sealUrl || settings.seal) && (
+                        <div className="relative">
+                          <img src={getImageUrl(settings.sealUrl || settings.seal)} alt="Store Seal" className="w-14 h-14 object-contain opacity-75" />
+                          <span className="absolute bottom-0 right-0 text-[8px] text-gray-400 font-sans">Official Seal</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}

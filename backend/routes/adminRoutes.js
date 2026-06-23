@@ -8,6 +8,7 @@ const {
   toggleUserStatus,
   deleteUser,
   getAllStores,
+  getStoreSummaries,
   toggleStore,
   getAllOrders,
   getAllProducts,
@@ -37,6 +38,7 @@ router.put('/users/:id/role', requirePermission('employees'), updateUserRole);
 router.put('/users/:id/toggle-status', requirePermission('employees'), toggleUserStatus);
 
 // Stores / Settings (requires 'settings' permission)
+router.get('/stores/summaries', requirePermission('settings'), getStoreSummaries);
 router.get('/stores', requirePermission('settings'), getAllStores);
 router.put('/stores/:id/toggle', requirePermission('settings'), toggleStore);
 

@@ -174,7 +174,7 @@ const getFinancialDashboard = async (req, res, next) => {
 // @access  Private
 const createTransaction = async (req, res, next) => {
   try {
-    const { storeId, type, category, amount, paymentMethod, referenceNo, description, date, attachments } = req.body;
+    const { storeId, accountId, type, category, amount, paymentMethod, referenceNo, description, date, chequeDetails } = req.body;
 
     let assignedStore = storeId;
     if (!assignedStore && req.user.role === 'manager') {
@@ -182,17 +182,19 @@ const createTransaction = async (req, res, next) => {
       if (store) assignedStore = store._id;
     }
 
-    const transaction = await Transaction.create({
+    const { recordTransaction } = require('../services/ledgerService');
+    const transaction = await recordTransaction({
       storeId: assignedStore || null,
+      accountId,
       type,
       category,
-      amount,
+      amount: Number(amount),
       paymentMethod: paymentMethod || 'Cash',
+      chequeDetails,
       referenceNo,
       description,
-      date: date || new Date(),
       createdBy: req.user._id,
-      attachments: attachments || []
+      date: date || new Date()
     });
 
     res.status(201).json(transaction);

@@ -425,6 +425,27 @@ const posLogin = async (req, res) => {
   }
 };
 
+const verifyPassword = async (req, res, next) => {
+  try {
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ message: 'Password is required' });
+    }
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const isMatch = await user.matchPassword(password);
+    if (isMatch) {
+      res.json({ success: true, message: 'Password verified successfully' });
+    } else {
+      res.status(401).json({ success: false, message: 'Incorrect login password' });
+    }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   registerUser,
   requestRegistrationOtp,
@@ -434,4 +455,5 @@ module.exports = {
   updateProfile,
   getCashiersList,
   posLogin,
+  verifyPassword,
 };

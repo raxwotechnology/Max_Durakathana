@@ -475,7 +475,7 @@ const listStockAdjustments = async (req, res, next) => {
 // @access  Private
 const createStockTransfer = async (req, res, next) => {
   try {
-    const { fromStore, toStore, products, notes, trackingNumber } = req.body;
+    const { fromStore, toStore, products, notes, trackingNumber, transferType = 'cash', amountPaid = 0 } = req.body;
     if (!fromStore || !toStore || !products || products.length === 0) {
       res.status(400); return next(new Error('Missing transfer data'));
     }
@@ -484,13 +484,18 @@ const createStockTransfer = async (req, res, next) => {
       res.status(400); return next(new Error('Cannot transfer to the same store'));
     }
 
-    // Check stock in fromStore
+    let totalAmount = 0;
+    // Check stock in fromStore and calculate total cost/price
     for (const p of products) {
       const prod = await Product.findOne({ _id: p.productId, storeId: fromStore });
       if (!prod || prod.stock < p.quantity) {
         res.status(400); return next(new Error(`Insufficient stock for product ${prod?.name || p.productId}`));
       }
+      totalAmount += (prod.price || 0) * Number(p.quantity);
     }
+
+    const calculatedPaid = Number(amountPaid) || 0;
+    const outstandingBalance = Math.max(0, totalAmount - calculatedPaid);
 
     // Deduct from fromStore immediately (it's in transit)
     for (const p of products) {
@@ -502,6 +507,10 @@ const createStockTransfer = async (req, res, next) => {
       toStore,
       products: products.map(p => ({ product: p.productId, quantity: Number(p.quantity) })),
       status: 'in_transit',
+      transferType,
+      totalAmount,
+      amountPaid: calculatedPaid,
+      outstandingBalance,
       dispatchedBy: req.user._id,
       dispatchedAt: new Date(),
       notes,

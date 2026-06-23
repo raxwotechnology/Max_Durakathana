@@ -2,6 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { Plus, Edit2, Trash2, Search, X, Wallet, CreditCard, Landmark, ArrowUpRight, ArrowDownLeft, History, MoreVertical, TrendingUp, DollarSign } from 'lucide-react';
 import DashboardLayout from '../../components/DashboardLayout';
 import { getAccounts, createAccount, updateAccount, deleteAccount, getAccountTransactions, getStores } from '../../services/api';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 import { toast } from 'react-toastify';
 import { adminNavGroups as navItems } from './adminNavItems';
@@ -114,6 +117,46 @@ const AdminAccounts = () => {
     }
   };
 
+  const exportExcel = (account) => {
+    const rows = transactions.map(t => ({
+      Date: new Date(t.date || t.createdAt).toLocaleDateString(),
+      Reference: t.referenceNo || '—',
+      Category: t.category,
+      Description: t.description,
+      Type: t.type.toUpperCase(),
+      Amount: t.amount
+    }));
+    const sheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Ledger Transactions');
+    XLSX.writeFile(workbook, `account_${account.name.replace(/\s+/g, '_')}_ledger.xlsx`);
+    toast.success('Excel downloaded');
+  };
+
+  const exportPDF = (account) => {
+    const doc = new jsPDF();
+    doc.text(`Ledger Transactions - ${account.name} (${account.type})`, 14, 15);
+    const head = [['Date', 'Reference', 'Category', 'Description', 'Type', 'Amount']];
+    const body = transactions.map(t => [
+      new Date(t.date || t.createdAt).toLocaleDateString(),
+      t.referenceNo || '—',
+      t.category,
+      t.description,
+      t.type.toUpperCase(),
+      `Rs. ${Number(t.amount).toLocaleString()}`
+    ]);
+    
+    autoTable(doc, {
+      head,
+      body,
+      startY: 20,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [41, 128, 185] }
+    });
+    doc.save(`account_${account.name.replace(/\s+/g, '_')}_ledger.pdf`);
+    toast.success('PDF downloaded');
+  };
+
   const totalBalance = accounts.reduce((s, a) => s + (a.balance || 0), 0);
 
   if (loading) {
@@ -132,7 +175,7 @@ const AdminAccounts = () => {
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl font-bold text-dark-navy flex items-center gap-2">
-              <Landmark className="text-primary-blue" /> Financial Accounts
+              <Landmark className="text-primary-blue" /> Bank Financial Accounts
             </h1>
             <p className="text-muted-text text-sm mt-1">Manage cash drawers, bank accounts and mobile wallets</p>
           </div>
@@ -294,7 +337,11 @@ const AdminAccounts = () => {
                   <h2 className="text-lg font-bold text-dark-navy">{viewingTransactions.name}</h2>
                   <p className="text-xs text-muted-text uppercase font-bold tracking-widest">{viewingTransactions.type} Ledger</p>
                 </div>
-                <button onClick={() => setViewingTransactions(null)} className="p-2 rounded-xl hover:bg-red-50 text-gray-400 hover:text-red-500 transition-all"><X size={22} /></button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => exportExcel(viewingTransactions)} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors shadow-sm">Export Excel</button>
+                  <button onClick={() => exportPDF(viewingTransactions)} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors shadow-sm">Export PDF</button>
+                  <button onClick={() => setViewingTransactions(null)} className="p-2 rounded-xl hover:bg-red-50 text-gray-400 hover:text-red-500 transition-all ml-1"><X size={20} /></button>
+                </div>
               </div>
 
               <div className="p-8 overflow-y-auto flex-1">

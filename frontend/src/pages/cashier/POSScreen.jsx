@@ -510,6 +510,8 @@ const POSScreen = () => {
       return;
     }
 
+    const isHP = pos.paymentMethod === 'hire_purchase';
+
     // Determine if any item is a mobile device and validate customer info
     let hasMobiles = false;
     for (const item of pos.cart) {
@@ -520,10 +522,21 @@ const POSScreen = () => {
       }
     }
 
-    if (hasMobiles || isCredit) {
+    if (hasMobiles || isCredit || isHP) {
       if (!pos.customerName || !pos.customerPhone) {
-        toast.error('Customer name and phone number are required for credit sales or mobile device purchases.');
+        toast.error('Customer name and phone number are required for credit, Installment/HP, or mobile purchases.');
         setShowCustomerInfo(true);
+        return;
+      }
+    }
+
+    if (isHP) {
+      if (!pos.hirePurchaseData || !pos.hirePurchaseData.customer?.nic) {
+        toast.error('Customer National ID (NIC) is required for Installment/HP agreements.');
+        return;
+      }
+      if (pos.hirePurchaseData.downPaymentMethod !== 'cash' && !pos.hirePurchaseData.downPaymentAccountId) {
+        toast.error('Please select target bank/drawer account for down payment.');
         return;
       }
     }
@@ -543,7 +556,7 @@ const POSScreen = () => {
     }
 
     // Validate split payments allocation
-    if (payments.length > 0) {
+    if (!isHP && payments.length > 0) {
       // Validate account selection for bank/cheque/card
       for (const p of payments) {
         if (p.method !== 'cash' && !p.accountId) {
@@ -563,6 +576,26 @@ const POSScreen = () => {
       }
     }
 
+    const checkoutPayments = isHP && pos.hirePurchaseData
+      ? [
+          {
+            method: pos.hirePurchaseData.downPaymentMethod || 'cash',
+            amount: parseFloat(pos.hirePurchaseData.downPayment) || 0,
+            accountId: pos.hirePurchaseData.downPaymentAccountId || undefined
+          },
+          {
+            method: 'hire_purchase',
+            amount: Math.max(0, grandTotal - (parseFloat(pos.hirePurchaseData.downPayment) || 0)),
+            accountId: undefined
+          }
+        ]
+      : payments.map(p => ({
+          method: p.method,
+          amount: parseFloat(p.amount) || 0,
+          accountId: p.accountId || undefined,
+          chequeDetails: p.method === 'cheque' ? p.chequeDetails : undefined
+        }));
+
     try {
       setCheckingOut(true);
       const { data } = await posCheckout({
@@ -574,13 +607,9 @@ const POSScreen = () => {
           price: item.price,
           imei: item.imei || [], // Pass scanned IMEIs
         })),
-        payments: payments.map(p => ({
-          method: p.method,
-          amount: parseFloat(p.amount) || 0,
-          accountId: p.accountId || undefined,
-          chequeDetails: p.method === 'cheque' ? p.chequeDetails : undefined
-        })),
-        paymentMethod: payments[0]?.method || 'cash',
+        payments: checkoutPayments,
+        paymentMethod: isHP ? 'hire_purchase' : (payments[0]?.method || 'cash'),
+        hirePurchaseData: isHP ? pos.hirePurchaseData : undefined,
         tenderedAmount: parseFloat(pos.tenderedAmount) || undefined,
         discount: pos.discount,
         discountType: pos.discountType,
@@ -606,7 +635,7 @@ const POSScreen = () => {
       if (data?.smsReceiptError) {
         toast.warning(`Sale completed, but SMS failed: ${data.smsReceiptError}`);
       } else {
-        toast.success(isCredit ? 'Credit sale recorded! 📋' : 'Sale completed! 🎉');
+        toast.success(isHP ? 'Installment/HP sale recorded! 📋' : isCredit ? 'Credit sale recorded! 📋' : 'Sale completed! 🎉');
       }
       setIsCredit(false);
       setCreditAmountPaid('');
@@ -751,6 +780,15 @@ const POSScreen = () => {
     }
   };
 
+  // Switch Cashier
+  const handleSwitchCashier = () => {
+    setIsUnlocked(false);
+    setUnlockCode('');
+    setUnlockError('');
+    setSelectedCashier(null);
+    pos.clearCart();
+  };
+
   // Logout
   const handleLogout = () => {
     pos.clearCart();
@@ -781,6 +819,7 @@ const POSScreen = () => {
   const couponDiscount = pos.getCouponDiscount();
   const loyaltyDiscount = pos.loyaltyDiscount || 0;
   const grandTotal = Math.max(0, pos.getGrandTotal() + kokoInterestAmt - exchangeCredit);
+  const isHP = pos.paymentMethod === 'hire_purchase';
   
   const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
   const totalPaidCash = payments.filter(p => p.method === 'cash').reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
@@ -791,6 +830,25 @@ const POSScreen = () => {
   } else if (pos.tenderedAmount && parseFloat(pos.tenderedAmount) > grandTotal) {
     change = parseFloat(pos.tenderedAmount) - grandTotal;
   }
+
+  // Synchronize single payment mode
+  useEffect(() => {
+    if (!isHP && payments.length === 1) {
+      const currentMethod = pos.paymentMethod || 'cash';
+      const expectedAmount = isCredit ? (parseFloat(creditAmountPaid) || 0) : grandTotal;
+      const existing = payments[0];
+      if (existing.method !== currentMethod || existing.amount !== expectedAmount) {
+        setPayments([
+          {
+            method: currentMethod,
+            amount: expectedAmount,
+            accountId: currentMethod === 'cash' ? '' : (existing.accountId || accounts.find(a => a.isDefault)?._id || accounts[0]?._id || ''),
+            chequeDetails: existing.chequeDetails || { number: '', bank: '', dueDate: '' }
+          }
+        ]);
+      }
+    }
+  }, [pos.paymentMethod, grandTotal, accounts, isHP, isCredit, creditAmountPaid]);
 
 
   const fetchCustomerPoints = async () => {
@@ -875,32 +933,26 @@ const POSScreen = () => {
         justifyContent: 'center',
         backgroundColor: '#0f172a',
         backgroundImage: 'radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.15) 0%, transparent 40%), radial-gradient(circle at 90% 80%, rgba(99, 102, 241, 0.15) 0%, transparent 40%)',
-        fontFamily: "'Inter', sans-serif"
+        fontFamily: "'Inter', sans-serif",
+        padding: '16px',
+        overflowY: 'auto'
       }}>
         {/* Main Glassmorphic Container */}
-        <div style={{
-          display: 'flex',
-          flexDirection: 'row',
-          background: 'rgba(30, 41, 59, 0.7)',
-          backdropFilter: 'blur(24px)',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
-          borderRadius: '32px',
-          width: '900px',
-          maxWidth: '95%',
-          height: '580px',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
-          overflow: 'hidden'
-        }} className="flex-col md:flex-row">
+        <div 
+          className="flex flex-col md:flex-row w-full max-w-[900px] h-auto md:h-[580px] overflow-y-auto md:overflow-hidden"
+          style={{
+            background: 'rgba(30, 41, 59, 0.7)',
+            backdropFilter: 'blur(24px)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '32px',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
+          }}
+        >
           
           {/* Left Panel: Profile Selection */}
-          <div style={{
-            flex: '1.2',
-            padding: '40px',
-            borderRight: '1px solid rgba(255, 255, 255, 0.08)',
-            display: 'flex',
-            flexDirection: 'column',
-            overflowY: 'auto'
-          }}>
+          <div 
+            className="flex-1 md:flex-[1.2] p-6 md:p-10 border-b md:border-b-0 md:border-r border-white/10 flex flex-col overflow-y-auto"
+          >
             <h2 style={{ fontSize: '20px', fontWeight: '800', color: '#fff', marginBottom: '8px', letterSpacing: '-0.5px' }}>
               Select Staff Profile
             </h2>
@@ -985,15 +1037,12 @@ const POSScreen = () => {
           </div>
 
           {/* Right Panel: Passcode Entry & Numpad */}
-          <div style={{
-            flex: '1',
-            padding: '40px',
-            background: 'rgba(15, 23, 42, 0.4)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}>
+          <div 
+            className="flex-1 p-6 md:p-10 flex flex-col items-center justify-center"
+            style={{
+              background: 'rgba(15, 23, 42, 0.4)'
+            }}
+          >
             {/* Header */}
             <div style={{ textAlign: 'center', marginBottom: '24px', width: '100%' }}>
               {selectedCashier ? (
@@ -1417,6 +1466,10 @@ const POSScreen = () => {
             <Smartphone size={18} />
             <span className="pos-topbar-btn-text">Reload</span>
           </button>
+          <button className="pos-topbar-btn" onClick={handleSwitchCashier} title="Switch Cashier" style={{ background: '#f5f3ff', color: '#5b21b6', borderColor: '#ddd6fe' }}>
+            <Lock size={18} />
+            <span className="pos-topbar-btn-text">Switch Cashier</span>
+          </button>
           <button className="pos-topbar-logout" onClick={handleLogout} title="Logout">
             <LogOut size={18} />
           </button>
@@ -1608,7 +1661,7 @@ const POSScreen = () => {
 
 
         {/* ──────── RIGHT PANEL: Cart ──────── */}
-        <div className="pos-cart-panel">
+        <div className="pos-cart-panel" style={pos.cart.length > 0 ? { flex: '4.5', maxWidth: '600px', transition: 'all 0.3s ease' } : { transition: 'all 0.3s ease' }}>
           <div className="pos-cart-header">
             <Receipt size={20} />
             <h2>Current Sale</h2>
@@ -1947,6 +2000,8 @@ const POSScreen = () => {
                         pos.setHirePurchaseData({
                           customer: { name: pos.customerName, phone: pos.customerPhone, nic: '', address: '', guarantors: [] },
                           downPayment: 0,
+                          downPaymentMethod: 'cash',
+                          downPaymentAccountId: '',
                           numberOfInstallments: 6,
                           installmentType: 'Monthly',
                           interestRate: 0,
@@ -1965,165 +2020,168 @@ const POSScreen = () => {
 
 
                 {/* Dynamic Multi-Payment Rows */}
-                <div style={{ marginBottom: '15px' }}>
-                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 'bold', color: '#6b7280', marginBottom: '8px', textTransform: 'uppercase' }}>
-                    Payment Allocation (Split Payments)
-                  </label>
-                  
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {payments.map((p, index) => (
-                      <div key={index} style={{ display: 'flex', flexDirection: 'column', gap: '6px', background: '#f8fafc', padding: '10px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <select
-                            value={p.method}
-                            onChange={(e) => {
-                              const newPayments = [...payments];
-                              newPayments[index].method = e.target.value;
-                              if (e.target.value === 'cash') {
-                                newPayments[index].accountId = '';
-                              } else {
-                                newPayments[index].accountId = accounts[0]?._id || '';
-                              }
-                              // Initialize Hire Purchase data if selected
-                              if (e.target.value === 'hire_purchase' && !pos.hirePurchaseData) {
-                                pos.setHirePurchaseData({
-                                  customer: { name: pos.customerName, phone: pos.customerPhone, nic: '', address: '', guarantors: [] },
-                                  downPayment: 0,
-                                  numberOfInstallments: 6,
-                                  installmentType: 'Monthly',
-                                  interestRate: 0,
-                                  interestAmount: 0,
-                                  netTotal: grandTotal,
-                                  installmentAmount: grandTotal / 6
-                                });
-                              }
-                              setPayments(newPayments);
-                            }}
-                            className="pos-input"
-                            style={{ flex: 1.5, fontSize: '12px', height: '36px', padding: '0 8px', background: '#fff', color: '#1e293b' }}
-                          >
-                            <option value="cash">Cash</option>
-                            <option value="card">Card</option>
-                            <option value="bank_transfer">Bank Transfer</option>
-                            <option value="cheque">Cheque</option>
-                            <option value="koko">Koko</option>
-                            <option value="hire_purchase">Hire Purchase</option>
-                          </select>
-
-                          {p.method !== 'cash' && (
+                {pos.paymentMethod !== 'hire_purchase' && (
+                  <div style={{ marginBottom: '15px' }}>
+                    <label style={{ display: 'block', fontSize: '11px', fontWeight: 'bold', color: '#6b7280', marginBottom: '8px', textTransform: 'uppercase' }}>
+                      Payment Allocation (Split Payments)
+                    </label>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {payments.map((p, index) => (
+                        <div key={index} style={{ display: 'flex', flexDirection: 'column', gap: '6px', background: '#f8fafc', padding: '10px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <select
-                              value={p.accountId}
+                              value={p.method}
                               onChange={(e) => {
                                 const newPayments = [...payments];
-                                newPayments[index].accountId = e.target.value;
+                                newPayments[index].method = e.target.value;
+                                if (e.target.value === 'cash') {
+                                  newPayments[index].accountId = '';
+                                } else {
+                                  newPayments[index].accountId = accounts[0]?._id || '';
+                                }
+                                // Initialize Hire Purchase data if selected
+                                if (e.target.value === 'hire_purchase' && !pos.hirePurchaseData) {
+                                  pos.setHirePurchaseData({
+                                    customer: { name: pos.customerName, phone: pos.customerPhone, nic: '', address: '', guarantors: [] },
+                                    downPayment: 0,
+                                    downPaymentMethod: 'cash',
+                                    downPaymentAccountId: '',
+                                    numberOfInstallments: 6,
+                                    installmentType: 'Monthly',
+                                    interestRate: 0,
+                                    interestAmount: 0,
+                                    netTotal: grandTotal,
+                                    installmentAmount: grandTotal / 6
+                                  });
+                                }
                                 setPayments(newPayments);
                               }}
                               className="pos-input"
-                              style={{ flex: 2, fontSize: '12px', height: '36px', padding: '0 8px', background: '#fff', color: '#1e293b' }}
+                              style={{ flex: 1.5, fontSize: '12px', height: '36px', padding: '0 8px', background: '#fff', color: '#1e293b' }}
                             >
-                              <option value="">Select Account</option>
-                              {accounts.map(a => (
-                                <option key={a._id} value={a._id}>
-                                  {a.name} {a.balance !== undefined ? `(Rs. ${a.balance.toLocaleString()})` : ''}
-                                </option>
-                              ))}
+                              <option value="cash">Cash</option>
+                              <option value="card">Card</option>
+                              <option value="bank_transfer">Bank Transfer</option>
+                              <option value="cheque">Cheque</option>
+                              <option value="koko">Koko</option>
                             </select>
-                          )}
 
-                          <input
-                            type="number"
-                            value={p.amount || ''}
-                            onChange={(e) => {
-                              const newPayments = [...payments];
-                              newPayments[index].amount = parseFloat(e.target.value) || 0;
-                              setPayments(newPayments);
-                            }}
-                            placeholder="Amount"
-                            className="pos-input"
-                            style={{ flex: 1.5, fontSize: '12px', height: '36px', padding: '0 8px', fontWeight: 'bold', background: '#fff', color: '#1e293b' }}
-                            min="0"
-                            step="0.01"
-                          />
+                            {p.method !== 'cash' && (
+                              <select
+                                value={p.accountId}
+                                onChange={(e) => {
+                                  const newPayments = [...payments];
+                                  newPayments[index].accountId = e.target.value;
+                                  setPayments(newPayments);
+                                }}
+                                className="pos-input"
+                                style={{ flex: 2, fontSize: '12px', height: '36px', padding: '0 8px', background: '#fff', color: '#1e293b' }}
+                              >
+                                <option value="">Select Account</option>
+                                {accounts.map(a => (
+                                  <option key={a._id} value={a._id}>
+                                    {a.name} {a.balance !== undefined ? `(Rs. ${a.balance.toLocaleString()})` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
 
-                          {payments.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPayments(payments.filter((_, i) => i !== index));
+                            <input
+                              type="number"
+                              value={p.amount || ''}
+                              onChange={(e) => {
+                                  const newPayments = [...payments];
+                                  newPayments[index].amount = parseFloat(e.target.value) || 0;
+                                  setPayments(newPayments);
                               }}
-                              style={{ border: 'none', background: 'none', color: '#ef4444', padding: '6px', cursor: 'pointer' }}
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                              placeholder="Amount"
+                              className="pos-input"
+                              style={{ flex: 1.5, fontSize: '12px', height: '36px', padding: '0 8px', fontWeight: 'bold', background: '#fff', color: '#1e293b' }}
+                              min="0"
+                              step="0.01"
+                            />
+
+                            {payments.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPayments(payments.filter((_, i) => i !== index));
+                                }}
+                                style={{ border: 'none', background: 'none', color: '#ef4444', padding: '6px', cursor: 'pointer' }}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
+                          </div>
+
+                          {p.method === 'cheque' && (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: '6px', marginTop: '4px' }}>
+                              <div>
+                                <label style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b' }}>Cheque No</label>
+                                <input
+                                  type="text"
+                                  value={p.chequeDetails?.number || ''}
+                                  onChange={(e) => {
+                                    const newPayments = [...payments];
+                                    newPayments[index].chequeDetails = { ...newPayments[index].chequeDetails, number: e.target.value };
+                                    setPayments(newPayments);
+                                  }}
+                                  placeholder="Number"
+                                  className="pos-input"
+                                  style={{ fontSize: '11px', height: '28px', padding: '0 6px', background: '#fff', color: '#1e293b' }}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b' }}>Bank</label>
+                                <input
+                                  type="text"
+                                  value={p.chequeDetails?.bank || ''}
+                                  onChange={(e) => {
+                                    const newPayments = [...payments];
+                                    newPayments[index].chequeDetails = { ...newPayments[index].chequeDetails, bank: e.target.value };
+                                    setPayments(newPayments);
+                                  }}
+                                  placeholder="e.g. BOC"
+                                  className="pos-input"
+                                  style={{ fontSize: '11px', height: '28px', padding: '0 6px', background: '#fff', color: '#1e293b' }}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b' }}>Due Date</label>
+                                <input
+                                  type="date"
+                                  value={p.chequeDetails?.dueDate || ''}
+                                  onChange={(e) => {
+                                    const newPayments = [...payments];
+                                    newPayments[index].chequeDetails = { ...newPayments[index].chequeDetails, dueDate: e.target.value };
+                                    setPayments(newPayments);
+                                  }}
+                                  className="pos-input"
+                                  style={{ fontSize: '11px', height: '28px', padding: '0 6px', background: '#fff', color: '#1e293b' }}
+                                />
+                              </div>
+                            </div>
                           )}
                         </div>
+                      ))}
+                    </div>
 
-                        {p.method === 'cheque' && (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: '6px', marginTop: '4px' }}>
-                            <div>
-                              <label style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b' }}>Cheque No</label>
-                              <input
-                                type="text"
-                                value={p.chequeDetails?.number || ''}
-                                onChange={(e) => {
-                                  const newPayments = [...payments];
-                                  newPayments[index].chequeDetails = { ...newPayments[index].chequeDetails, number: e.target.value };
-                                  setPayments(newPayments);
-                                }}
-                                placeholder="Number"
-                                className="pos-input"
-                                style={{ fontSize: '11px', height: '28px', padding: '0 6px', background: '#fff', color: '#1e293b' }}
-                              />
-                            </div>
-                            <div>
-                              <label style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b' }}>Bank</label>
-                              <input
-                                type="text"
-                                value={p.chequeDetails?.bank || ''}
-                                onChange={(e) => {
-                                  const newPayments = [...payments];
-                                  newPayments[index].chequeDetails = { ...newPayments[index].chequeDetails, bank: e.target.value };
-                                  setPayments(newPayments);
-                                }}
-                                placeholder="e.g. BOC"
-                                className="pos-input"
-                                style={{ fontSize: '11px', height: '28px', padding: '0 6px', background: '#fff', color: '#1e293b' }}
-                              />
-                            </div>
-                            <div>
-                              <label style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b' }}>Due Date</label>
-                              <input
-                                type="date"
-                                value={p.chequeDetails?.dueDate || ''}
-                                onChange={(e) => {
-                                  const newPayments = [...payments];
-                                  newPayments[index].chequeDetails = { ...newPayments[index].chequeDetails, dueDate: e.target.value };
-                                  setPayments(newPayments);
-                                }}
-                                className="pos-input"
-                                style={{ fontSize: '11px', height: '28px', padding: '0 6px', background: '#fff', color: '#1e293b' }}
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPayments([...payments, { method: 'cash', amount: 0, accountId: '', chequeDetails: { number: '', bank: '', dueDate: '' } }]);
+                      }}
+                      className="pos-apply-discount-btn"
+                      style={{ marginTop: '8px', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', height: '32px', fontSize: '12px' }}
+                    >
+                      <Plus size={14} /> Add Payment Row
+                    </button>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPayments([...payments, { method: 'cash', amount: 0, accountId: '', chequeDetails: { number: '', bank: '', dueDate: '' } }]);
-                    }}
-                    className="pos-apply-discount-btn"
-                    style={{ marginTop: '8px', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', height: '32px', fontSize: '12px' }}
-                  >
-                    <Plus size={14} /> Add Payment Row
-                  </button>
-                </div>
+                )}
 
                 {/* Hire Purchase Details */}
-                {payments.some(p => p.method === 'hire_purchase') && pos.hirePurchaseData && (
+                {(pos.paymentMethod === 'hire_purchase' || payments.some(p => p.method === 'hire_purchase')) && pos.hirePurchaseData && (
                   <div style={{ background: '#fef3c7', padding: '15px', borderRadius: '16px', border: '1px solid #fde68a', marginBottom: '10px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                       <Clock size={18} className="text-amber-600" />
@@ -2170,6 +2228,49 @@ const POSScreen = () => {
                           }}
                           placeholder="0.00" className="pos-input" style={{ fontSize: '12px', background: '#fff', fontWeight: 'bold', color: '#1e293b' }} />
                       </div>
+                      <div>
+                        <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#92400e' }}>Down Payment Method *</label>
+                        <select 
+                          value={pos.hirePurchaseData.downPaymentMethod || 'cash'}
+                          onChange={(e) => {
+                            pos.setHirePurchaseData({
+                              ...pos.hirePurchaseData,
+                              downPaymentMethod: e.target.value,
+                              downPaymentAccountId: e.target.value === 'cash' ? '' : (accounts.find(a => a.isDefault)?._id || accounts[0]?._id || '')
+                            });
+                          }}
+                          className="pos-input" 
+                          style={{ fontSize: '12px', background: '#fff', color: '#1e293b', height: '36px' }}
+                        >
+                          <option value="cash">Cash</option>
+                          <option value="card">Card</option>
+                          <option value="bank_transfer">Bank Transfer</option>
+                        </select>
+                      </div>
+
+                      {(pos.hirePurchaseData.downPaymentMethod || 'cash') !== 'cash' && (
+                        <div style={{ gridColumn: 'span 2' }}>
+                          <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#92400e' }}>Target Bank/Drawer Account *</label>
+                          <select
+                            value={pos.hirePurchaseData.downPaymentAccountId || ''}
+                            onChange={(e) => {
+                              pos.setHirePurchaseData({
+                                ...pos.hirePurchaseData,
+                                downPaymentAccountId: e.target.value
+                              });
+                            }}
+                            className="pos-input"
+                            style={{ fontSize: '12px', background: '#fff', color: '#1e293b', height: '36px' }}
+                          >
+                            <option value="">Select Account</option>
+                            {accounts.map(a => (
+                              <option key={a._id} value={a._id}>
+                                {a.name} {a.balance !== undefined ? `(Rs. ${a.balance.toLocaleString()})` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                       <div>
                         <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#92400e' }}>Interest Amount (Rs.)</label>
                         <input type="number" value={pos.hirePurchaseData.interestAmount || 0}
@@ -2260,6 +2361,93 @@ const POSScreen = () => {
                         <span className="pos-change-amount">Rs. {change.toFixed(2)}</span>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Single Payment Method Fields (when not split payments) */}
+                {payments.length === 1 && pos.paymentMethod !== 'cash' && pos.paymentMethod !== 'hire_purchase' && (
+                  <div style={{ background: '#f8fafc', padding: '15px', borderRadius: '16px', border: '1px solid #e2e8f0', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                      <Landmark size={18} className="text-blue-600" />
+                      <h4 style={{ margin: 0, fontSize: '13px', fontWeight: 'bold', color: '#1e293b', textTransform: 'capitalize' }}>
+                        {pos.paymentMethod.replace('_', ' ')} Details
+                      </h4>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px' }}>
+                      <div>
+                        <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#64748b', display: 'block', marginBottom: '4px' }}>Target Account *</label>
+                        <select
+                          value={payments[0]?.accountId || ''}
+                          onChange={(e) => {
+                            const newPayments = [...payments];
+                            newPayments[0].accountId = e.target.value;
+                            setPayments(newPayments);
+                          }}
+                          className="pos-input"
+                          style={{ width: '100%', fontSize: '12px', background: '#fff', color: '#1e293b', height: '36px' }}
+                        >
+                          <option value="">Select Account</option>
+                          {accounts.map(a => (
+                            <option key={a._id} value={a._id}>
+                              {a.name} {a.balance !== undefined ? `(Rs. ${a.balance.toLocaleString()})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {pos.paymentMethod === 'cheque' && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '4px' }}>
+                          <div style={{ gridColumn: 'span 2' }}>
+                            <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#64748b' }}>Cheque Number *</label>
+                            <input
+                              type="text"
+                              required
+                              value={payments[0]?.chequeDetails?.number || ''}
+                              onChange={(e) => {
+                                const newPayments = [...payments];
+                                newPayments[0].chequeDetails = { ...newPayments[0].chequeDetails, number: e.target.value };
+                                setPayments(newPayments);
+                              }}
+                              placeholder="Cheque Number"
+                              className="pos-input"
+                              style={{ fontSize: '12px', height: '36px', background: '#fff', color: '#1e293b' }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#64748b' }}>Bank *</label>
+                            <input
+                              type="text"
+                              required
+                              value={payments[0]?.chequeDetails?.bank || ''}
+                              onChange={(e) => {
+                                const newPayments = [...payments];
+                                newPayments[0].chequeDetails = { ...newPayments[0].chequeDetails, bank: e.target.value };
+                                setPayments(newPayments);
+                              }}
+                              placeholder="e.g. BOC"
+                              className="pos-input"
+                              style={{ fontSize: '12px', height: '36px', background: '#fff', color: '#1e293b' }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#64748b' }}>Due Date *</label>
+                            <input
+                              type="date"
+                              required
+                              value={payments[0]?.chequeDetails?.dueDate || ''}
+                              onChange={(e) => {
+                                const newPayments = [...payments];
+                                newPayments[0].chequeDetails = { ...newPayments[0].chequeDetails, dueDate: e.target.value };
+                                setPayments(newPayments);
+                              }}
+                              className="pos-input"
+                              style={{ fontSize: '12px', height: '36px', background: '#fff', color: '#1e293b' }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 

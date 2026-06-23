@@ -26,7 +26,7 @@ const updateSettings = async (req, res) => {
       'shopName', 'tagline', 'email', 'phone', 'phone2', 'address', 'city', 'country',
       'currency', 'exchangeRate', 'deliveryFeeThreshold', 'deliveryFee', 'taxRate',
       'loyaltyPointsPerUnit', 'loyaltyPointValue', 'footerText', 'maintenanceMode',
-      'logoUrl', 'logo',
+      'logoUrl', 'logo', 'sealUrl', 'seal', 'letterheadHeader', 'letterheadFooter', 'labelPrinters',
     ];
 
     fields.forEach(field => {

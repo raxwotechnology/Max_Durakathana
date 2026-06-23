@@ -172,13 +172,21 @@ const InvoiceModal = ({ isOpen, onClose, order, onNewSale }) => {
                   {settings?.logo && (
                     <img src={getImageUrl(settings.logo)} alt="" style={{ width: '48px', height: '48px', objectFit: 'contain', marginBottom: '8px', display: 'block', borderRadius: '8px' }} />
                   )}
-                  <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#1e293b', margin: 0 }}>
-                    {order.storeId?.name || brandName}
-                  </h2>
-                  <p style={{ fontSize: '11px', margin: '4px 0 0', color: '#64748b', lineHeight: '1.4' }}>
-                    {order.storeId?.address || brandAddress}<br />
-                    Phone: {order.storeId?.phone || brandPhone} | Email: {order.storeId?.email || brandEmail}
-                  </p>
+                  {settings?.letterheadHeader ? (
+                    <div style={{ fontSize: '11px', whiteSpace: 'pre-line', color: '#334155', lineHeight: '1.4', fontFamily: 'inherit', textAlign: 'left' }}>
+                      {settings.letterheadHeader}
+                    </div>
+                  ) : (
+                    <>
+                      <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#1e293b', margin: 0 }}>
+                        {order.storeId?.name || brandName}
+                      </h2>
+                      <p style={{ fontSize: '11px', margin: '4px 0 0', color: '#64748b', lineHeight: '1.4' }}>
+                        {order.storeId?.address || brandAddress}<br />
+                        Phone: {order.storeId?.phone || brandPhone} | Email: {order.storeId?.email || brandEmail}
+                      </p>
+                    </>
+                  )}
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <h1 style={{ fontSize: '24px', fontWeight: 900, color: '#2563eb', margin: 0, letterSpacing: '1px' }}>
@@ -293,6 +301,33 @@ const InvoiceModal = ({ isOpen, onClose, order, onNewSale }) => {
                   <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '2px solid #e2e8f0', fontSize: '14px', fontWeight: 800, color: '#1e293b' }}>
                     <span>GRAND TOTAL:</span>
                     <span>Rs. {order.totalAmount.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer Terms, Letterhead & Seal */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '30px', borderTop: '1px solid #cbd5e1', paddingTop: '16px' }}>
+                <div style={{ width: '65%', fontSize: '10px', color: '#64748b', textAlign: 'left' }}>
+                  {settings?.letterheadFooter ? (
+                    <div style={{ whiteSpace: 'pre-line', lineHeight: '1.4', marginBottom: '8px' }}>
+                      {settings.letterheadFooter}
+                    </div>
+                  ) : (
+                    <p style={{ margin: '0 0 6px 0' }}>{settings?.receiptSettings?.footerMessage || 'Thank you for your purchase!'}</p>
+                  )}
+                  {settings?.receiptSettings?.termsAndConditions && <p style={{ margin: '0 0 4px 0', fontSize: '9px', fontStyle: 'italic' }}>T&C: {settings.receiptSettings.termsAndConditions}</p>}
+                  {showWarranty && settings?.receiptSettings?.warrantyTerms && <p style={{ margin: 0, fontSize: '9px', fontStyle: 'italic' }}>Warranty: {settings.receiptSettings.warrantyTerms}</p>}
+                </div>
+                
+                <div style={{ width: '30%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end' }}>
+                  {(settings?.sealUrl || settings?.seal) && (
+                    <div style={{ textAlign: 'center', marginBottom: '8px' }}>
+                      <img src={getImageUrl(settings.sealUrl || settings.seal)} alt="Seal" style={{ width: '64px', height: '64px', objectFit: 'contain', opacity: 0.8, margin: '0 auto' }} />
+                      <div style={{ fontSize: '8px', color: '#94a3b8', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Official Seal</div>
+                    </div>
+                  )}
+                  <div style={{ borderTop: '1px solid #cbd5e1', width: '100%', textAlign: 'center', paddingTop: '4px', fontSize: '10px', fontWeight: 600, color: '#475569' }}>
+                    Authorized Signature
                   </div>
                 </div>
               </div>
@@ -496,6 +531,11 @@ const InvoiceModal = ({ isOpen, onClose, order, onNewSale }) => {
               {/* Barcode */}
               <div style={{ textAlign: 'center', margin: '10px 0 6px', borderTop: '1px dashed #999', paddingTop: '8px' }}>
                 {showBarcode && <svg ref={barcodeRef} style={{ maxWidth: '200px', display: 'block', margin: '0 auto' }}></svg>}
+                
+                {(settings?.sealUrl || settings?.seal) && (
+                  <img src={getImageUrl(settings.sealUrl || settings.seal)} alt="Seal" style={{ width: '48px', height: '48px', objectFit: 'contain', margin: '6px auto', display: 'block', opacity: 0.8 }} />
+                )}
+
                 {(documentTemplate.footerText || settings?.receiptSettings?.footerMessage) && (
                   <p style={{ fontSize: '10px', color: '#111', fontWeight: 700, margin: '8px 0 0' }}>
                     {documentTemplate.footerText || settings.receiptSettings.footerMessage}
